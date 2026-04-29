@@ -24,7 +24,8 @@ def read_prompts(path: Path) -> list[str]:
 
 def make_pipe(model_path: str, dtype: torch.dtype) -> CogVideoXPipeline:
     pipe = CogVideoXPipeline.from_pretrained(model_path, torch_dtype=dtype)
-    pipe.to("cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pipe.to(device)
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
     return pipe
@@ -60,10 +61,10 @@ def generate_videos(
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Generate side-by-side base vs LoRA outputs for the same prompt set.")
     parser.add_argument("--base_model", required=True, help="Base CogVideoX model path")
     parser.add_argument("--lora_path", required=True, help="LoRA output dir or weights dir")
-    parser.add_argument("--prompts_file", default="test_prompts.txt")
+    parser.add_argument("--prompts_file", default="dataset/test_prompts.txt")
     parser.add_argument("--output_root", default="compare_outputs")
     parser.add_argument("--height", type=int, default=960)
     parser.add_argument("--width", type=int, default=544)

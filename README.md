@@ -1,238 +1,291 @@
-# LoRA finetuning example for CogVideoX
+# CogVideoX Cat LoRA
 
-Low-Rank Adaption of Large Language Models was first introduced by Microsoft in [LoRA: Low-Rank Adaptation of Large Language Models](https://huggingface.co/papers/2106.09685) by *Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen*.
+这是一个围绕猫咪视频数据集做 `CogVideoX LoRA` 微调、对比生成与测评的小型工程。仓库里已经包含：
 
-In a nutshell, LoRA allows adapting pretrained models by adding pairs of rank-decomposition matrices to existing weights and **only** training those newly added weights. This has a couple of advantages:
+- 文生视频 LoRA 训练脚本：[`train_cogvideox_lora.py`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/train_cogvideox_lora.py)
+- 图生视频 LoRA 训练脚本：[`train_cogvideox_image_to_video_lora.py`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/train_cogvideox_image_to_video_lora.py)
+- Base/LoRA 对比生成脚本：[`compare_base_lora.py`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/compare_base_lora.py)
+- Gradio 演示：[`gradio_app.py`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/gradio_app.py)
+- 自动测评与人工复核工具：[`evaluation/`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/evaluation)
 
-- Previous pretrained weights are kept frozen so that model is not prone to [catastrophic forgetting](https://www.pnas.org/doi/10.1073/pnas.1611835114).
-- Rank-decomposition matrices have significantly fewer parameters than original model, which means that trained LoRA weights are easily portable.
-- LoRA attention layers allow to control to which extent the model is adapted toward new training images via a `scale` parameter.
+相关参考链接：
 
-At the moment, LoRA finetuning has only been tested for [CogVideoX-2b](https://huggingface.co/THUDM/CogVideoX-2b).
+- CogVideoX 项目：[THUDM/CogVideo](https://github.com/THUDM/CogVideo)
+- Diffusers 中的 CogVideoX 训练与推理生态：[huggingface/diffusers](https://github.com/huggingface/diffusers)
+- LoRA 论文：[LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685)
+- VBench 项目：[VBench](https://github.com/Vchitect/VBench)
 
-> [!NOTE]
-> The scripts for CogVideoX come with limited support and may not be fully compatible with different training techniques. They are not feature-rich either and simply serve as minimal examples of finetuning to take inspiration from and improve.
->
-> A repository containing memory-optimized finetuning scripts with support for multiple resolutions, dataset preparation, captioning, etc. is available [here](https://github.com/a-r-r-o-w/cogvideox-factory), which will be maintained jointly by the CogVideoX and Diffusers team.
+## 项目结构
 
-## Data Preparation
-
-The training scripts accepts data in two formats.
-
-**First data format**
-
-Two files where one file contains line-separated prompts and another file contains line-separated paths to video data (the path to video files must be relative to the path you pass when specifying `--instance_data_root`). Let's take a look at an example to understand this better!
-
-Assume you've specified `--instance_data_root` as `/dataset`, and that this directory contains the files: `prompts.txt` and `videos.txt`.
-
-The `prompts.txt` file should contain line-separated prompts:
-
-```
-A black and white animated sequence featuring a rabbit, named Rabbity Ribfried, and an anthropomorphic goat in a musical, playful environment, showcasing their evolving interaction.
-A black and white animated sequence on a ship's deck features a bulldog character, named Bully Bulldoger, showcasing exaggerated facial expressions and body language. The character progresses from confident to focused, then to strained and distressed, displaying a range of emotions as it navigates challenges. The ship's interior remains static in the background, with minimalistic details such as a bell and open door. The character's dynamic movements and changing expressions drive the narrative, with no camera movement to distract from its evolving reactions and physical gestures.
-...
-```
-
-The `videos.txt` file should contain line-separate paths to video files. Note that the path should be _relative_ to the `--instance_data_root` directory.
-
-```
-videos/00000.mp4
-videos/00001.mp4
-...
+```text
+cogvideox-cat-lora/
+├── dataset/
+│   ├── prompts.txt
+│   ├── videos.txt
+│   └── test_prompts.txt
+├── evaluation/
+│   ├── videobench_lite_eval.py
+├── compare_base_lora.py
+├── gradio_app.py
+├── train_cogvideox_lora.py
+├── train_cogvideox_image_to_video_lora.py
+└── requirements.txt
 ```
 
-Overall, this is how your dataset would look like if you ran the `tree` command on the dataset root directory:
+## 环境准备
 
-```
-/dataset
-├── prompts.txt
-├── videos.txt
-├── videos
-    ├── videos/00000.mp4
-    ├── videos/00001.mp4
-    ├── ...
-```
-
-When using this format, the `--caption_column` must be `prompts.txt` and `--video_column` must be `videos.txt`.
-
-**Second data format**
-
-You could use a single CSV file. For the sake of this example, assume you have a `metadata.csv` file. The expected format is:
-
-```
-<CAPTION_COLUMN>,<PATH_TO_VIDEO_COLUMN>
-"""A black and white animated sequence featuring a rabbit, named Rabbity Ribfried, and an anthropomorphic goat in a musical, playful environment, showcasing their evolving interaction.""","""00000.mp4"""
-"""A black and white animated sequence on a ship's deck features a bulldog character, named Bully Bulldoger, showcasing exaggerated facial expressions and body language. The character progresses from confident to focused, then to strained and distressed, displaying a range of emotions as it navigates challenges. The ship's interior remains static in the background, with minimalistic details such as a bell and open door. The character's dynamic movements and changing expressions drive the narrative, with no camera movement to distract from its evolving reactions and physical gestures.""","""00001.mp4"""
-...
-```
-
-In this case, the `--instance_data_root` should be the location where the videos are stored and `--dataset_name` should be either a path to local folder or `load_dataset` compatible hosted HF Dataset Repository or URL. Assuming you have videos of your Minecraft gameplay at `https://huggingface.co/datasets/my-awesome-username/minecraft-videos`, you would have to specify `my-awesome-username/minecraft-videos`.
-
-When using this format, the `--caption_column` must be `<CAPTION_COLUMN>` and `--video_column` must be `<PATH_TO_VIDEO_COLUMN>`.
-
-You are not strictly restricted to the CSV format. As long as the `load_dataset` method supports the file format to load a basic `<PATH_TO_VIDEO_COLUMN>` and `<CAPTION_COLUMN>`, you should be good to go. The reason for going through these dataset organization gymnastics for loading video data is because we found `load_dataset` from the datasets library to not fully support all kinds of video formats. This will undoubtedly be improved in the future.
-
->![NOTE]
-> CogVideoX works best with long and descriptive LLM-augmented prompts for video generation. We recommend pre-processing your videos by first generating a summary using a VLM and then augmenting the prompts with an LLM. To generate the above captions, we use [MiniCPM-V-26](https://huggingface.co/openbmb/MiniCPM-V-2_6) and [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct). A very barebones and no-frills example for this is available [here](https://gist.github.com/a-r-r-o-w/4dee20250e82f4e44690a02351324a4a). The official recommendation for augmenting prompts is [ChatGLM](https://huggingface.co/THUDM?search_models=chatglm) and a length of 50-100 words is considered good.
-
->![NOTE]
-> It is expected that your dataset is already pre-processed. If not, some basic pre-processing can be done by playing with the following parameters:
-> `--height`, `--width`, `--fps`, `--max_num_frames`, `--skip_frames_start` and `--skip_frames_end`.
-> Presently, all videos in your dataset should contain the same number of video frames when using a training batch size > 1.
-
-<!-- TODO: Implement frame packing in future to address above issue. -->
-
-## Training
-
-You need to setup your development environment by installing the necessary requirements. The following packages are required:
-- Torch 2.0 or above based on the training features you are utilizing (might require latest or nightly versions for quantized/deepspeed training)
-- `pip install diffusers transformers accelerate peft huggingface_hub` for all things modeling and training related
-- `pip install datasets decord` for loading video training data
-- `pip install bitsandbytes` for using 8-bit Adam or AdamW optimizers for memory-optimized training
-- `pip install wandb` optionally for monitoring training logs
-- `pip install deepspeed` optionally for [DeepSpeed](https://github.com/microsoft/DeepSpeed) training
-- `pip install prodigyopt` optionally if you would like to use the Prodigy optimizer for training
-
-To make sure you can successfully run the latest versions of the example scripts, we highly recommend **installing from source** and keeping the install up to date as we update the example scripts frequently and install some example-specific requirements. To do this, execute the following steps in a new virtual environment:
+建议使用 Python 3.10 到 3.12，并提前准备好 CUDA 环境与可用显卡。
 
 ```bash
-git clone https://github.com/huggingface/diffusers
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+训练脚本依赖较新的 `diffusers`，建议直接安装源码版：
+
+```bash
+git clone https://github.com/huggingface/diffusers.git
 cd diffusers
 pip install -e .
+cd ..
 ```
 
-And initialize an [🤗 Accelerate](https://github.com/huggingface/accelerate/) environment with:
-
-```bash
-accelerate config
-```
-
-Or for a default accelerate configuration without answering questions about your environment
+然后初始化 `accelerate`：
 
 ```bash
 accelerate config default
 ```
 
-Or if your environment doesn't support an interactive shell (e.g., a notebook)
+## 数据组织
 
-```python
-from accelerate.utils import write_basic_config
-write_basic_config()
+当前仓库默认使用两文件格式：
+
+- [`dataset/prompts.txt`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/dataset/prompts.txt)：逐行文本提示词
+- [`dataset/videos.txt`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/dataset/videos.txt)：逐行视频相对路径
+
+目录示例：
+
+```text
+dataset/
+├── prompts.txt
+├── videos.txt
+└── videos/
+    ├── 001.mp4
+    ├── 002.mp4
+    └── ...
 ```
 
-When running `accelerate config`, if we specify torch compile mode to True there can be dramatic speedups. Note also that we use PEFT library as backend for LoRA training, make sure to have `peft>=0.6.0` installed in your environment.
+注意事项：
 
-If you would like to push your model to the HF Hub after training is completed with a neat model card, make sure you're logged in:
+- `videos.txt` 里的路径必须相对 `--instance_data_root`。
+- `prompts.txt` 和 `videos.txt` 的行数必须一一对应。
+- `dataset/test_prompts.txt` 用于推理对比和测评，不参与训练。
+- 建议视频尽量统一分辨率、帧数和时长，能明显减少训练时的数据预处理问题。
 
-```
-hf auth login
+## 模型微调方法
 
-# Alternatively, you could upload your model manually using:
-# hf upload my-cool-account-name/my-cool-lora-name /path/to/awesome/lora
-```
+这里的训练主线保持不变：使用 `Diffusers + PEFT` 对 `CogVideoX` 做 `LoRA` 微调，而不是全量微调。
 
-Make sure your data is prepared as described in [Data Preparation](#data-preparation). When ready, you can begin training!
+### 1. 文生视频 LoRA 微调
 
-Assuming you are training on 50 videos of a similar concept, we have found 1500-2000 steps to work well. The official recommendation, however, is 100 videos with a total of 4000 steps. Assuming you are training on a single GPU with a `--train_batch_size` of `1`:
-- 1500 steps on 50 videos would correspond to `30` training epochs
-- 4000 steps on 100 videos would correspond to `40` training epochs
-
-The following bash script launches training for text-to-video lora.
+最小可执行命令如下：
 
 ```bash
-#!/bin/bash
-
-GPU_IDS="0"
-
-accelerate launch --gpu_ids $GPU_IDS examples/cogvideo/train_cogvideox_lora.py \
+accelerate launch train_cogvideox_lora.py \
   --pretrained_model_name_or_path THUDM/CogVideoX-2b \
-  --cache_dir <CACHE_DIR> \
-  --instance_data_root <PATH_TO_WHERE_VIDEO_FILES_ARE_STORED> \
-  --dataset_name my-awesome-name/my-awesome-dataset \
-  --caption_column <CAPTION_COLUMN> \
-  --video_column <PATH_TO_VIDEO_COLUMN> \
-  --id_token <ID_TOKEN> \
-  --validation_prompt "<ID_TOKEN> Spiderman swinging over buildings:::A panda, dressed in a small, red jacket and a tiny hat, sits on a wooden stool in a serene bamboo forest. The panda's fluffy paws strum a miniature acoustic guitar, producing soft, melodic tunes. Nearby, a few other pandas gather, watching curiously and some clapping in rhythm. Sunlight filters through the tall bamboo, casting a gentle glow on the scene. The panda's face is expressive, showing concentration and joy as it plays. The background includes a small, flowing stream and vibrant green foliage, enhancing the peaceful and magical atmosphere of this unique musical performance" \
-  --validation_prompt_separator ::: \
+  --instance_data_root dataset \
+  --caption_column prompts.txt \
+  --video_column videos.txt \
+  --validation_prompt "A vertical close-up shot of an orange tabby cat resting on a soft indoor cushion in warm natural sunlight." \
   --num_validation_videos 1 \
-  --validation_epochs 10 \
+  --validation_epochs 5 \
   --seed 42 \
   --rank 64 \
   --lora_alpha 64 \
-  --mixed_precision fp16 \
-  --output_dir /raid/aryan/cogvideox-lora \
-  --height 480 --width 720 --fps 8 --max_num_frames 49 --skip_frames_start 0 --skip_frames_end 0 \
+  --mixed_precision bf16 \
+  --output_dir outputs/cogvideox-cat-lora \
+  --height 480 \
+  --width 720 \
+  --fps 8 \
+  --max_num_frames 49 \
   --train_batch_size 1 \
   --num_train_epochs 30 \
-  --checkpointing_steps 1000 \
+  --checkpointing_steps 500 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 1e-3 \
+  --learning_rate 1e-4 \
   --lr_scheduler cosine_with_restarts \
   --lr_warmup_steps 200 \
-  --lr_num_cycles 1 \
   --enable_slicing \
   --enable_tiling \
-  --optimizer Adam \
+  --optimizer AdamW \
   --adam_beta1 0.9 \
   --adam_beta2 0.95 \
-  --max_grad_norm 1.0 \
-  --report_to wandb
+  --max_grad_norm 1.0
 ```
 
-For launching image-to-video finetuning instead, run the `train_cogvideox_image_to_video_lora.py` file instead. Additionally, you will have to pass `--validation_images` as paths to initial images corresponding to `--validation_prompts` for I2V validation to work.
+常用参数说明：
 
-To better track our training experiments, we're using the following flags in the command above:
-* `--report_to wandb` will ensure the training runs are tracked on Weights and Biases. To use it, be sure to install `wandb` with `pip install wandb`.
-* `validation_prompt` and `validation_epochs` to allow the script to do a few validation inference runs. This allows us to qualitatively check if the training is progressing as expected.
+- `--pretrained_model_name_or_path`：基础模型，可以是本地路径或 Hugging Face 模型名。
+- `--instance_data_root`：数据根目录，这个仓库默认就是 `dataset`。
+- `--caption_column prompts.txt`：提示词文件名。
+- `--video_column videos.txt`：视频列表文件名。
+- `--rank` 和 `--lora_alpha`：LoRA 规模，当前项目更推荐从 `32/64` 或 `64/64` 起步。
+- `--height --width --fps --max_num_frames`：训练前的视频采样与重整形策略。
+- `--validation_prompt`：训练中用于定期抽样验证的提示词。
+- `--output_dir`：LoRA 权重、checkpoint、验证视频输出目录。
 
-Note that setting the `<ID_TOKEN>` is not necessary. From some limited experimentation, we found it to work better (as it resembles [Dreambooth](https://huggingface.co/docs/diffusers/en/training/dreambooth) like training) than without. When provided, the ID_TOKEN is appended to the beginning of each prompt. So, if your ID_TOKEN was `"DISNEY"` and your prompt was `"Spiderman swinging over buildings"`, the effective prompt used in training would be `"DISNEY Spiderman swinging over buildings"`. When not provided, you would either be training without any such additional token or could augment your dataset to apply the token where you wish before starting the training.
+经验建议：
 
-> [!TIP]
-> You can pass `--use_8bit_adam` to reduce the memory requirements of training.
-> You can pass `--video_reshape_mode` video cropping functionality, supporting options: ['center', 'random', 'none']. See [this](https://gist.github.com/glide-the/7658dbfd5f555be0a1a687a4139dba40) notebook for examples.
+- 当前脚本最稳妥的起点仍然是 `CogVideoX-2b`。
+- 如果数据提示词质量一般，`rank=64` 往往比很低的 rank 更稳。
+- 25 到 50 条同风格视频可以先做概念验证，正式训练建议准备更多样本。
+- 训练中请务必打开验证采样，不然很难及时发现过拟合或退化。
 
-> [!IMPORTANT]
-> The following settings have been tested at the time of adding CogVideoX LoRA training support:
-> - Our testing was primarily done on CogVideoX-2b. We will work on CogVideoX-5b and CogVideoX-5b-I2V soon
-> - One dataset comprised of 70 training videos of resolutions `200 x 480 x 720` (F x H x W). From this, by using frame skipping in data preprocessing, we created two smaller 49-frame and 16-frame datasets for faster experimentation and because the maximum limit recommended by the CogVideoX team is 49 frames. Out of the 70 videos, we created three groups of 10, 25 and 50 videos. All videos were similar in nature of the concept being trained.
-> - 25+ videos worked best for training new concepts and styles.
-> - We found that it is better to train with an identifier token that can be specified as `--id_token`. This is similar to Dreambooth-like training but normal finetuning without such a token works too.
-> - Trained concept seemed to work decently well when combined with completely unrelated prompts. We expect even better results if CogVideoX-5B is finetuned.
-> - The original repository uses a `lora_alpha` of `1`. We found this not suitable in many runs, possibly due to difference in modeling backends and training settings. Our recommendation is to set to the `lora_alpha` to either `rank` or `rank // 2`.
-> - If you're training on data whose captions generate bad results with the original model, a `rank` of 64 and above is good and also the recommendation by the team behind CogVideoX. If the generations are already moderately good on your training captions, a `rank` of 16/32 should work. We found that setting the rank too low, say `4`, is not ideal and doesn't produce promising results.
-> - The authors of CogVideoX recommend 4000 training steps and 100 training videos overall to achieve the best result. While that might yield the best results, we found from our limited experimentation that 2000 steps and 25 videos could also be sufficient.
-> - When using the Prodigy optimizer for training, one can follow the recommendations from [this](https://huggingface.co/blog/sdxl_lora_advanced_script) blog. Prodigy tends to overfit quickly. From my very limited testing, I found a learning rate of `0.5` to be suitable in addition to `--prodigy_use_bias_correction`, `prodigy_safeguard_warmup` and `--prodigy_decouple`.
-> - The recommended learning rate by the CogVideoX authors and from our experimentation with Adam/AdamW is between `1e-3` and `1e-4` for a dataset of 25+ videos.
->
-> Note that our testing is not exhaustive due to limited time for exploration. Our recommendation would be to play around with the different knobs and dials to find the best settings for your data.
+### 2. 图生视频 LoRA 微调
 
-## Inference
+如果你要做 `Image-to-Video` 微调，使用下面的脚本：
 
-Once you have trained a lora model, the inference can be done simply loading the lora weights into the `CogVideoXPipeline`.
-
-```python
-import torch
-from diffusers import CogVideoXPipeline
-from diffusers.utils import export_to_video
-
-pipe = CogVideoXPipeline.from_pretrained("THUDM/CogVideoX-2b", torch_dtype=torch.float16)
-# pipe.load_lora_weights("/path/to/lora/weights", adapter_name="cogvideox-lora") # Or,
-pipe.load_lora_weights("my-awesome-hf-username/my-awesome-lora-name", adapter_name="cogvideox-lora") # If loading from the HF Hub
-pipe.to("cuda")
-
-# Assuming lora_alpha=32 and rank=64 for training. If different, set accordingly
-pipe.set_adapters(["cogvideox-lora"], [32 / 64])
-
-prompt = (
-    "A panda, dressed in a small, red jacket and a tiny hat, sits on a wooden stool in a serene bamboo forest. The "
-    "panda's fluffy paws strum a miniature acoustic guitar, producing soft, melodic tunes. Nearby, a few other "
-    "pandas gather, watching curiously and some clapping in rhythm. Sunlight filters through the tall bamboo, "
-    "casting a gentle glow on the scene. The panda's face is expressive, showing concentration and joy as it plays. "
-    "The background includes a small, flowing stream and vibrant green foliage, enhancing the peaceful and magical "
-    "atmosphere of this unique musical performance"
-)
-frames = pipe(prompt, guidance_scale=6, use_dynamic_cfg=True).frames[0]
-export_to_video(frames, "output.mp4", fps=8)
+```bash
+accelerate launch train_cogvideox_image_to_video_lora.py \
+  --pretrained_model_name_or_path THUDM/CogVideoX-5b-I2V \
+  --instance_data_root dataset \
+  --caption_column prompts.txt \
+  --video_column videos.txt \
+  --validation_prompt "A fluffy cat slowly turns its head in warm window light." \
+  --validation_images "assets/val_cat.png" \
+  --num_validation_videos 1 \
+  --validation_epochs 5 \
+  --seed 42 \
+  --rank 64 \
+  --lora_alpha 64 \
+  --mixed_precision bf16 \
+  --output_dir outputs/cogvideox-cat-i2v-lora \
+  --height 480 \
+  --width 720 \
+  --fps 8 \
+  --max_num_frames 49 \
+  --train_batch_size 1 \
+  --num_train_epochs 30 \
+  --learning_rate 1e-4
 ```
 
-If you've trained a LoRA for `CogVideoXImageToVideoPipeline` instead, everything in the above example remains the same except you must also pass an image as initial condition for generation.
+这里和文生视频的核心区别只有两点：
+
+- 使用 `train_cogvideox_image_to_video_lora.py`
+- 额外提供 `--validation_images`，并保证图片顺序与 `--validation_prompt` 一一对应
+
+## 推理与对比生成方法
+
+训练完成后，可以把同一组测试提示词分别送入 base 模型和 LoRA 模型，生成对比视频：
+
+```bash
+python3 compare_base_lora.py \
+  --base_model THUDM/CogVideoX-2b \
+  --lora_path outputs/cogvideox-cat-lora \
+  --prompts_file dataset/test_prompts.txt \
+  --output_root compare_outputs \
+  --height 960 \
+  --width 544 \
+  --num_frames 25 \
+  --num_inference_steps 50 \
+  --guidance_scale 6 \
+  --fps 8 \
+  --lora_alpha 64 \
+  --lora_rank 64
+```
+
+输出目录会长这样：
+
+```text
+compare_outputs/
+├── base/
+│   ├── 001.mp4
+│   ├── 002.mp4
+│   └── ...
+└── lora/
+    ├── 001.mp4
+    ├── 002.mp4
+    └── ...
+```
+
+如果想开一个本地 Web 界面手动试玩：
+
+```bash
+python3 gradio_app.py \
+  --base_model THUDM/CogVideoX-2b \
+  --lora_path outputs/cogvideox-cat-lora \
+  --output_dir gradio_outputs \
+  --lora_scale 1.0 \
+  --server_port 7860
+```
+
+## 模型测评方法
+
+这个仓库现在只保留一条主测评路径：`Video-Bench-lite`。
+
+### Video-Bench-lite 语义测评
+
+[`evaluation/videobench_lite_eval.py`](/Users/man.tang/PycharmProjects/cogvideox-cat-lora/evaluation/videobench_lite_eval.py) 是一个面向本仓库目录结构的轻量化评测脚本。它参考了 [VBench](https://github.com/Vchitect/VBench) 将视频评估拆成多个维度的思路，但不是官方 VBench 的原样复现；当前实现更适合用于 `CogVideoX base` 和 `CogVideoX LoRA` 的成对横向比较。
+
+当前保留的核心思路：
+
+- `visual_score`：清晰度、对比度、饱和度、曝光
+- `temporal_score`：时序一致性与光流平滑性
+- `prompt_score`：基于 CLIP 的图文语义一致性
+- `total_score`：上述三类分数的加权汇总
+
+适用场景：
+
+- 比较同一组 prompt 下 base 与 LoRA 的相对提升
+- 做训练回合之间的横向实验记录
+- 辅助人工复核，而不是替代人工判断
+
+```bash
+python3 evaluation/videobench_lite_eval.py \
+  --compare_dir compare_outputs \
+  --prompts_file dataset/test_prompts.txt
+```
+
+主要输出：
+
+- `compare_outputs/videobench_lite_results/scores.csv`
+- `compare_outputs/videobench_lite_results/pair_summary.csv`
+- `compare_outputs/videobench_lite_results/report.json`
+- `compare_outputs/videobench_lite_results/report.md`
+- `compare_outputs/videobench_lite_results/review.html`
+
+## 推荐工作流
+
+如果你想从零到一完整跑一轮，建议直接按下面顺序：
+
+```bash
+# 1) 训练 LoRA
+accelerate launch train_cogvideox_lora.py ...
+
+# 2) 生成 base / lora 对比视频
+python3 compare_base_lora.py \
+  --base_model THUDM/CogVideoX-2b \
+  --lora_path outputs/cogvideox-cat-lora \
+  --prompts_file dataset/test_prompts.txt \
+  --output_root compare_outputs
+
+# 3) 跑 Video-Bench-lite
+python3 evaluation/videobench_lite_eval.py \
+  --compare_dir compare_outputs \
+  --prompts_file dataset/test_prompts.txt
+```
+
+## 当前仓库的已知特点
+
+- 训练脚本本身很完整，但文档此前还是上游示例，和本仓库实际目录不匹配。
+- 评测工具偏工程化实用，其中 `videobench_lite_eval.py` 明确是参考 `VBench` 思路的轻量化实现，不是官方基准复现，适合做自己实验的横向对比。
+- 当前项目已经去掉旧的多分支评测脚本，只保留一条更清晰的 `CogVideoX LoRA + VBench-like` 主流程。
+
+## 排错建议
+
+- `CUDA out of memory`：先降 `--height`、`--width`、`--max_num_frames` 或开启更小 batch。
+- `validation` 视频不出结果：先检查 `--validation_prompt` 是否传入，以及输出目录是否可写。
+- LoRA 效果不明显：优先检查 `lora_alpha / rank` 比例、训练步数、提示词质量和测试提示词是否过于偏离训练分布。
+- 测评脚本找不到文件：确认 `compare_outputs/base` 和 `compare_outputs/lora` 下的命名是否是一一对应的 `001.mp4`、`002.mp4` 形式。
